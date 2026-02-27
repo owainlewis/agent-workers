@@ -29,7 +29,9 @@ from todoist_api_python.api import TodoistAPI
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TASK_TIMEOUT = 300  # 5 minutes per task
+MAX_RETRIES = 3  # give up after this many failures
 ALLOWED_TOOLS = ["Read", "Write", "Glob", "Grep", "Bash(uv run:*)"]
+RETRY_PREFIX = "agent-retry-"  # labels: agent-retry-1, agent-retry-2, etc.
 
 
 def find_project_id(api: TodoistAPI, name: str) -> str | None:
@@ -96,6 +98,7 @@ def dispatch(title: str, description: str | None, *,
     print("  Dispatching to Claude Code...")
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
+    env.pop("ANTHROPIC_API_KEY", None)  # use subscription plan, not API credits
 
     # Use Popen for both modes so we can kill the child on Ctrl+C
     try:
@@ -160,17 +163,51 @@ def dispatch(title: str, description: str | None, *,
         _kill_child()
         return False, f"Timed out after {TASK_TIMEOUT}s"
 
+    stderr_text = proc.stderr.read() if proc.stderr else ""
+
     if proc.returncode == 0:
         print("  Done.")
         summary = result_text[:500] + ("..." if len(result_text) > 500 else "") if result_text else "Completed."
         return True, summary
     else:
-        stderr = proc.stderr.read()[:500] if proc.stderr else "Unknown error"
-        print(f"  Failed (exit {proc.returncode}): {stderr}")
-        return False, f"Failed (exit {proc.returncode}): {stderr}"
+        # Build a useful error message from everything we have
+        error_parts = [f"Exit code {proc.returncode}"]
+        if stderr_text.strip():
+            error_parts.append(f"stderr: {stderr_text.strip()[:500]}")
+        if not verbose and not result_text:
+            # In non-verbose mode, stdout might have useful info too
+            stdout_raw = proc.stdout.read() if proc.stdout else ""
+            if stdout_raw.strip():
+                error_parts.append(f"stdout: {stdout_raw.strip()[:500]}")
+        if result_text:
+            error_parts.append(f"output: {result_text[:500]}")
+
+        error_msg = "\n".join(error_parts)
+        print(f"  Failed:\n  {error_msg.replace(chr(10), chr(10) + '  ')}")
+        return False, error_msg
 
 
-def run_once(api: TodoistAPI, project_id: str, *, verbose: bool = False) -> int:
+def _get_retry_count(labels: list[str]) -> int:
+    """Extract retry count from task labels."""
+    for label in labels:
+        if label.startswith(RETRY_PREFIX):
+            try:
+                return int(label[len(RETRY_PREFIX):])
+            except ValueError:
+                pass
+    return 0
+
+
+def _set_retry_label(api: TodoistAPI, task_id: str, labels: list[str], count: int):
+    """Update task labels with new retry count."""
+    # Remove old retry labels
+    new_labels = [l for l in labels if not l.startswith(RETRY_PREFIX)]
+    new_labels.append(f"{RETRY_PREFIX}{count}")
+    api.update_task(task_id=task_id, labels=new_labels)
+
+
+def run_once(api: TodoistAPI, project_id: str, *, verbose: bool = False,
+             max_retries: int = MAX_RETRIES) -> int:
     """Process all pending tasks. Returns count processed."""
     tasks = []
     for page in api.get_tasks(project_id=project_id):
@@ -182,11 +219,18 @@ def run_once(api: TodoistAPI, project_id: str, *, verbose: bool = False) -> int:
 
     processed = 0
     for task in tasks:
-        if "agent-done" in (task.labels or []):
+        labels = task.labels or []
+
+        if "agent-done" in labels or "agent-failed" in labels:
             continue
 
-        print(f"\nTask: {task.content}")
-        comment(api, task.id, "🤖 Agent picked up this task. Working on it now...")
+        retries = _get_retry_count(labels)
+        if retries >= max_retries:
+            continue  # already gave up, skip silently
+
+        retry_info = f" (attempt {retries + 1}/{max_retries})" if retries > 0 else ""
+        print(f"\nTask: {task.content}{retry_info}")
+        comment(api, task.id, f"Working on it...{retry_info}")
 
         success, summary = dispatch(
             task.content, task.description,
@@ -194,13 +238,25 @@ def run_once(api: TodoistAPI, project_id: str, *, verbose: bool = False) -> int:
         )
 
         if success:
-            comment(api, task.id, f"✅ Done. Ready for review.\n\n{summary}")
-            api.update_task(task_id=task.id, labels=[*(task.labels or []), "agent-done"])
+            comment(api, task.id, f"Done. Ready for review.\n\n{summary}")
+            # Clean up retry labels and mark done
+            done_labels = [l for l in labels if not l.startswith(RETRY_PREFIX)]
+            done_labels.append("agent-done")
+            api.update_task(task_id=task.id, labels=done_labels)
             print("  Done. Left open for review.")
             processed += 1
         else:
-            comment(api, task.id, f"❌ Failed. Will retry next run.\n\n{summary}")
-            print("  Skipped (will retry next run).")
+            retries += 1
+            if retries >= max_retries:
+                comment(api, task.id, f"Failed after {max_retries} attempts. Giving up.\n\n{summary}")
+                failed_labels = [l for l in labels if not l.startswith(RETRY_PREFIX)]
+                failed_labels.append("agent-failed")
+                api.update_task(task_id=task.id, labels=failed_labels)
+                print(f"  Failed permanently after {max_retries} attempts.")
+            else:
+                comment(api, task.id, f"Failed (attempt {retries}/{max_retries}). Will retry.\n\n{summary}")
+                _set_retry_label(api, task.id, labels, retries)
+                print(f"  Failed (attempt {retries}/{max_retries}). Will retry next run.")
 
     return processed
 
@@ -212,6 +268,8 @@ def main():
     parser.add_argument("--interval", type=int, default=30, help="Poll interval in seconds")
     parser.add_argument("--verbose", action="store_true",
                         help="Stream progress updates to Todoist as the agent works")
+    parser.add_argument("--max-retries", type=int, default=MAX_RETRIES,
+                        help=f"Give up after N failures (default {MAX_RETRIES})")
     args = parser.parse_args()
 
     token = os.getenv("TODOIST_API_TOKEN")
@@ -237,14 +295,16 @@ def main():
     if args.verbose:
         print("Verbose mode: progress updates will be posted to Todoist")
 
+    max_retries = args.max_retries
+
     try:
         if args.watch:
             print(f"Polling every {args.interval}s. Ctrl+C to stop.\n")
             while True:
-                run_once(api, project_id, verbose=args.verbose)
+                run_once(api, project_id, verbose=args.verbose, max_retries=max_retries)
                 time.sleep(args.interval)
         else:
-            run_once(api, project_id, verbose=args.verbose)
+            run_once(api, project_id, verbose=args.verbose, max_retries=max_retries)
     except KeyboardInterrupt:
         print("\nStopped.")
         sys.exit(0)
