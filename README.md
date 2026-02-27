@@ -7,10 +7,10 @@ graph LR
     A["Todoist<br/>(add task)"] -->|poll| B["agent_worker.py<br/>(~100 lines)"]
     B -->|"claude -p"| C["Claude Code<br/>(does the work)"]
     C -->|save| D["Airtable + workspace/"]
-    B -->|close task| A
+    B -->|"comment + label"| A
 ```
 
-**The pattern**: A to-do app is the control plane. A Python script polls for tasks and dispatches them to Claude Code. Each Todoist project is an employee with a specific job.
+**The pattern**: A to-do app is the control plane. A Python script polls for tasks and dispatches them to Claude Code. Each Todoist project is an employee with a specific job. The agent comments on tasks as it works, then leaves them open for you to review.
 
 **Read the full tutorial**: [docs/tutorial.md](docs/tutorial.md)
 
@@ -27,7 +27,7 @@ td auth login
 td project create --name "LinkedIn Writer"
 
 # 3. Add a task
-td add "Why background agents beat chatbots" --project "LinkedIn Writer"
+td task add "Why background agents beat chatbots" --project "LinkedIn Writer"
 
 # 4. Run the worker
 uv run tools/agent_worker.py --project "LinkedIn Writer"

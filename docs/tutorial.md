@@ -21,12 +21,12 @@ graph LR
     A[Task Queue] -->|poll| B[Worker]
     B -->|dispatch| C[AI Agent]
     C -->|output| D[Delivery Target]
-    B -->|close task| A
+    B -->|"comment + tag"| A
 ```
 
 **Task Queue** — Where you add tasks. This is the control plane. It's how you tell agents what to do without sitting in a chat window.
 
-**Worker** — A small script that polls the task queue, builds a prompt from each task, dispatches it to the agent, and marks the task complete when it's done.
+**Worker** — A small script that polls the task queue, builds a prompt from each task, dispatches it to the agent, and reports back with comments. Tasks stay open for human review.
 
 **AI Agent** — The thing that actually does the work. In our case, Claude Code running with skill files that tell it how to write, review, and format content.
 
@@ -36,11 +36,12 @@ The worker is the glue. It's the only code you write. The task queue and the age
 
 You could trigger agents from a cron job, a webhook, or a Slack message. A task queue is better because:
 
-1. **Visibility** — You can see what's pending, what's done, what failed. Open your phone, check the list.
-2. **Retry** — Failed tasks stay open. The worker picks them up on the next run.
-3. **Prioritisation** — Reorder tasks, add due dates, flag urgent work.
-4. **Input from anywhere** — Add tasks from your phone, a browser extension, an API, or voice.
-5. **Familiar interface** — You already know how to use a to-do app.
+1. **Visibility** — You can see what's pending, what's in progress, what's done. Open your phone, check the list. The agent comments on tasks as it works, so you always know the status.
+2. **Human review** — Completed tasks stay open with an `agent-done` label. You review the output and close the task yourself. The agent does the work, you make the call.
+3. **Retry** — Failed tasks stay open without the label. The worker picks them up on the next run.
+4. **Prioritisation** — Reorder tasks, add due dates, flag urgent work.
+5. **Input from anywhere** — Add tasks from your phone, a browser extension, an API, or voice.
+6. **Familiar interface** — You already know how to use a to-do app.
 
 Any task management tool works. Todoist, Linear, Asana, GitHub Issues, a database table. The pattern is the same.
 
@@ -80,26 +81,30 @@ sequenceDiagram
     participant C as Claude Code
     participant O as Output
 
-    W->>T: Get open tasks in project
+    W->>T: Get open tasks (skip agent-done)
     T-->>W: Task list
 
     loop Each task
+        W->>T: Comment "working on it"
         W->>C: claude -p "prompt" --allowedTools [...]
         C->>C: Read skills, write content, self-review
         C->>O: Save to workspace/ + push to Airtable
         C-->>W: Exit code 0
-        W->>T: Close task
+        W->>T: Comment "done" + add agent-done label
     end
+
+    Note over T: Human reviews and closes tasks
 ```
 
 The worker doesn't know anything about LinkedIn posts, content strategy, or Airtable schemas. It just:
 
-1. **Polls** — Fetches open tasks from a Todoist project
-2. **Builds a prompt** — Turns the task title + description into instructions
+1. **Polls** — Fetches open tasks from a Todoist project (skips tasks labeled `agent-done`)
+2. **Comments** — Posts "working on it" so you can see progress in Todoist
 3. **Dispatches** — Runs `claude -p` with the prompt and scoped permissions
-4. **Closes** — Marks the task complete in Todoist on success
+4. **Reports back** — Comments "done" with a summary, adds `agent-done` label
+5. **Leaves the task open** — You review the output and close it when you're satisfied
 
-That's the entire responsibility of the worker. The agent handles everything else.
+That's the entire responsibility of the worker. The agent handles the actual work. You handle the final call.
 
 ### 2. The Agent (Claude Code + Skills)
 
@@ -170,7 +175,7 @@ td project create --name "LinkedIn Writer"
 ### Add a task
 
 ```bash
-td add "Why background agents beat chatbots for real work" --project "LinkedIn Writer"
+td task add "Why background agents beat chatbots for real work" --project "LinkedIn Writer"
 ```
 
 ### Start the worker
@@ -183,7 +188,7 @@ uv run tools/agent_worker.py --project "LinkedIn Writer"
 uv run tools/agent_worker.py --project "LinkedIn Writer" --watch
 ```
 
-The worker finds the task, dispatches it to Claude Code, and closes it when done. Check `workspace/linkedin/` for the draft.
+The worker finds the task, comments "working on it", dispatches to Claude Code, then comments "done" and adds the `agent-done` label. The task stays open — check Todoist for the status comments and `workspace/linkedin/` for the draft. Close the task yourself once you've reviewed it.
 
 ### Multiple employees
 
@@ -205,13 +210,13 @@ Each one watches its own project, dispatches with its own skills and permissions
 
 The pattern works with anything that has an API:
 
-| Queue | How to poll | How to close |
-|-------|-------------|--------------|
-| Todoist | `todoist-api-python` SDK | `api.close_task()` |
-| Linear | GraphQL API | Update issue status |
-| GitHub Issues | `gh` CLI or REST API | Close issue |
-| Airtable | Filter by status field | Update status to "done" |
-| PostgreSQL | `SELECT WHERE status = 'pending'` | `UPDATE SET status = 'done'` |
+| Queue | How to poll | How to mark done |
+|-------|-------------|-----------------|
+| Todoist | `todoist-api-python` SDK | Add label + comment |
+| Linear | GraphQL API | Move to "Review" status |
+| GitHub Issues | `gh` CLI or REST API | Add label + comment |
+| Airtable | Filter by status field | Update status to "review" |
+| PostgreSQL | `SELECT WHERE status = 'pending'` | `UPDATE SET status = 'review'` |
 
 Replace the `TodoistAPI` calls in the worker and the rest stays the same.
 
@@ -237,16 +242,18 @@ The delivery target is whatever the agent's skill files tell it to do. Change th
 - Create a PR on GitHub
 - Send a Slack message
 
-The worker doesn't care. It just dispatches and closes.
+The worker doesn't care. It just dispatches and reports back.
 
 ## Why This Works
 
 The key insight is **separation of concerns**:
 
-- **You** decide what needs doing (add a task)
-- **The worker** handles lifecycle (poll, dispatch, close)
+- **You** decide what needs doing (add a task) and what ships (review + close)
+- **The worker** handles lifecycle (poll, dispatch, comment, label)
 - **The agent** handles judgement (writing, reviewing, deciding)
 - **Skill files** encode your standards (voice, structure, quality)
+
+The human stays in the loop where it matters — at the review step. The agent does the work. You make the final call. This is important: you're not removing yourself from the process, you're removing yourself from the generation step.
 
 No framework. No orchestration platform. No YAML configs. A to-do app, a Python script, and an AI agent with good instructions.
 

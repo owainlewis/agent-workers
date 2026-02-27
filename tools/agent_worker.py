@@ -31,6 +31,7 @@ TASK_TIMEOUT = 300  # 5 minutes per task
 
 # --- Todoist helpers ---
 
+
 def find_project_id(api: TodoistAPI, name: str) -> str | None:
     """Find a Todoist project by name (case-insensitive)."""
     target = name.lower()
@@ -50,6 +51,7 @@ def comment(api: TodoistAPI, task_id: str, message: str):
 
 
 # --- Prompt + dispatch ---
+
 
 def build_prompt(title: str, description: str | None) -> str:
     """Build the prompt that Claude Code will execute."""
@@ -85,17 +87,22 @@ def dispatch_task(title: str, description: str | None) -> tuple[bool, str]:
 
     cmd = [
         "claude",
-        "-p", prompt,
-        "--model", "sonnet",
-        "--output-format", "json",
+        "-p",
+        prompt,
+        "--model",
+        "sonnet",
+        "--output-format",
+        "json",
     ]
     for tool in allowed_tools:
         cmd.extend(["--allowedTools", tool])
 
-    print(f"  Dispatching to Claude Code...")
+    print("  Dispatching to Claude Code...")
     try:
         env = os.environ.copy()
-        env.pop("CLAUDECODE", None)  # allow spawning claude from within a claude session
+        env.pop(
+            "CLAUDECODE", None
+        )  # allow spawning claude from within a claude session
         result = subprocess.run(
             cmd,
             cwd=str(REPO_ROOT),
@@ -138,6 +145,7 @@ def dispatch_task(title: str, description: str | None) -> tuple[bool, str]:
 
 # --- Main loop ---
 
+
 def run_once(api: TodoistAPI, project_id: str) -> int:
     """Process all pending tasks. Returns count processed."""
     tasks = []
@@ -150,6 +158,10 @@ def run_once(api: TodoistAPI, project_id: str) -> int:
 
     processed = 0
     for task in tasks:
+        # Skip tasks already processed — waiting for human review
+        if "agent-done" in (task.labels or []):
+            continue
+
         print(f"\nTask: {task.content}")
 
         # Comment: picked up
@@ -158,24 +170,35 @@ def run_once(api: TodoistAPI, project_id: str) -> int:
         success, summary = dispatch_task(task.content, task.description)
 
         if success:
-            # Comment: done
-            comment(api, task.id, f"✅ Done.\n\n{summary}")
-            api.complete_task(task_id=task.id)
-            print(f"  Marked complete in Todoist.")
+            # Comment: done — leave task open for human review, tag so we skip it next poll
+            comment(api, task.id, f"✅ Done. Ready for review.\n\n{summary}")
+            api.update_task(
+                task_id=task.id, labels=[*(task.labels or []), "agent-done"]
+            )
+            print("  Done. Left open for review.")
             processed += 1
         else:
             # Comment: failed
             comment(api, task.id, f"❌ Failed. Will retry next run.\n\n{summary}")
-            print(f"  Skipped (will retry next run).")
+            print("  Skipped (will retry next run).")
 
     return processed
 
 
 def main():
     parser = argparse.ArgumentParser(description="Background agent worker")
-    parser.add_argument("--project", required=True, help="Todoist project name to watch (e.g. 'LinkedIn Writer')")
+    parser.add_argument(
+        "--project",
+        required=True,
+        help="Todoist project name to watch (e.g. 'LinkedIn Writer')",
+    )
     parser.add_argument("--watch", action="store_true", help="Poll continuously")
-    parser.add_argument("--interval", type=int, default=30, help="Poll interval in seconds (default: 30)")
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=30,
+        help="Poll interval in seconds (default: 30)",
+    )
     args = parser.parse_args()
 
     token = os.getenv("TODOIST_API_TOKEN")
@@ -189,14 +212,20 @@ def main():
                     break
 
     if not token:
-        print("Error: TODOIST_API_TOKEN not set. Add it to .env or export it.", file=sys.stderr)
+        print(
+            "Error: TODOIST_API_TOKEN not set. Add it to .env or export it.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     api = TodoistAPI(token)
 
     project_id = find_project_id(api, args.project)
     if not project_id:
-        print(f"Error: No '{args.project}' project found in Todoist. Create one first.", file=sys.stderr)
+        print(
+            f"Error: No '{args.project}' project found in Todoist. Create one first.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print(f"Watching project: {args.project} (id: {project_id})")
