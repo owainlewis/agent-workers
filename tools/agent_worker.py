@@ -29,6 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TASK_TIMEOUT = 300  # 5 minutes per task
 
 
+# --- Todoist helpers ---
+
 def find_project_id(api: TodoistAPI, name: str) -> str | None:
     """Find a Todoist project by name (case-insensitive)."""
     target = name.lower()
@@ -38,6 +40,16 @@ def find_project_id(api: TodoistAPI, name: str) -> str | None:
                 return project.id
     return None
 
+
+def comment(api: TodoistAPI, task_id: str, message: str):
+    """Add a comment to a Todoist task."""
+    try:
+        api.add_comment(content=message, task_id=task_id)
+    except Exception as e:
+        print(f"  Warning: failed to add comment: {e}")
+
+
+# --- Prompt + dispatch ---
 
 def build_prompt(title: str, description: str | None) -> str:
     """Build the prompt that Claude Code will execute."""
@@ -59,8 +71,8 @@ Instructions:
 """
 
 
-def dispatch_task(title: str, description: str | None) -> bool:
-    """Invoke Claude Code with the task prompt. Returns True on success."""
+def dispatch_task(title: str, description: str | None) -> tuple[bool, str]:
+    """Invoke Claude Code with the task prompt. Returns (success, summary)."""
     prompt = build_prompt(title, description)
 
     allowed_tools = [
@@ -82,35 +94,52 @@ def dispatch_task(title: str, description: str | None) -> bool:
 
     print(f"  Dispatching to Claude Code...")
     try:
+        env = os.environ.copy()
+        env.pop("CLAUDECODE", None)  # allow spawning claude from within a claude session
         result = subprocess.run(
             cmd,
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
             timeout=TASK_TIMEOUT,
+            env=env,
         )
         if result.returncode == 0:
+            cost = "?"
+            result_text = ""
             try:
                 output = json.loads(result.stdout)
-                print(f"  Done. Cost: ${output.get('cost_usd', '?')}")
+                cost = output.get("cost_usd", "?")
+                result_text = output.get("result", "")
             except json.JSONDecodeError:
-                print(f"  Done.")
-            return True
+                pass
+            print(f"  Done. Cost: ${cost}")
+            summary = f"Cost: ${cost}"
+            if result_text:
+                # Truncate to keep comment readable
+                preview = result_text[:500]
+                if len(result_text) > 500:
+                    preview += "..."
+                summary += f"\n\n{preview}"
+            return True, summary
         else:
+            error_msg = result.stderr[:500] if result.stderr else "Unknown error"
             print(f"  Failed (exit {result.returncode})")
             if result.stderr:
-                print(f"  stderr: {result.stderr[:500]}")
-            return False
+                print(f"  stderr: {error_msg}")
+            return False, f"Failed (exit {result.returncode}): {error_msg}"
     except subprocess.TimeoutExpired:
         print(f"  Timed out after {TASK_TIMEOUT}s")
-        return False
+        return False, f"Timed out after {TASK_TIMEOUT}s"
     except FileNotFoundError:
         print("  Error: 'claude' not found. Is Claude Code installed?")
-        return False
+        return False, "'claude' command not found"
 
+
+# --- Main loop ---
 
 def run_once(api: TodoistAPI, project_id: str) -> int:
-    """Process all pending tasks in the Agent project. Returns count processed."""
+    """Process all pending tasks. Returns count processed."""
     tasks = []
     for page in api.get_tasks(project_id=project_id):
         tasks.extend(page)
@@ -122,12 +151,21 @@ def run_once(api: TodoistAPI, project_id: str) -> int:
     processed = 0
     for task in tasks:
         print(f"\nTask: {task.content}")
-        success = dispatch_task(task.content, task.description)
+
+        # Comment: picked up
+        comment(api, task.id, "🤖 Agent picked up this task. Working on it now...")
+
+        success, summary = dispatch_task(task.content, task.description)
+
         if success:
-            api.close_task(task_id=task.id)
+            # Comment: done
+            comment(api, task.id, f"✅ Done.\n\n{summary}")
+            api.complete_task(task_id=task.id)
             print(f"  Marked complete in Todoist.")
             processed += 1
         else:
+            # Comment: failed
+            comment(api, task.id, f"❌ Failed. Will retry next run.\n\n{summary}")
             print(f"  Skipped (will retry next run).")
 
     return processed
