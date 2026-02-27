@@ -29,9 +29,10 @@ TASK_TIMEOUT = 300  # 5 minutes per task
 
 def get_agent_project_id(api: TodoistAPI) -> str | None:
     """Find the 'Agent' project in Todoist."""
-    for project in api.get_projects():
-        if project.name.lower() == "agent":
-            return project.id
+    for page in api.get_projects():
+        for project in page:
+            if project.name.lower() == "agent":
+                return project.id
     return None
 
 
@@ -107,7 +108,9 @@ def dispatch_task(title: str, description: str | None) -> bool:
 
 def run_once(api: TodoistAPI, project_id: str) -> int:
     """Process all pending tasks in the Agent project. Returns count processed."""
-    tasks = api.get_tasks(project_id=project_id)
+    tasks = []
+    for page in api.get_tasks(project_id=project_id):
+        tasks.extend(page)
 
     if not tasks:
         print("No pending tasks.")
