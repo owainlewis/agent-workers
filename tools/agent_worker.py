@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -96,73 +97,67 @@ def dispatch(title: str, description: str | None, *,
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
 
-    if not verbose:
-        # Simple mode: run and wait
-        try:
-            result = subprocess.run(
-                cmd, cwd=str(REPO_ROOT), capture_output=True, text=True,
-                timeout=TASK_TIMEOUT, env=env,
-            )
-            if result.returncode == 0:
-                result_text = ""
-                try:
-                    output = json.loads(result.stdout)
-                    result_text = output.get("result", "")
-                except json.JSONDecodeError:
-                    pass
-                print("  Done.")
-                summary = result_text[:500] + ("..." if len(result_text) > 500 else "") if result_text else "Completed."
-                return True, summary
-            else:
-                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
-                print(f"  Failed (exit {result.returncode}): {error_msg}")
-                return False, f"Failed (exit {result.returncode}): {error_msg}"
-        except subprocess.TimeoutExpired:
-            return False, f"Timed out after {TASK_TIMEOUT}s"
-        except FileNotFoundError:
-            return False, "'claude' command not found"
-
-    # Verbose mode: stream events and post progress to Todoist
+    # Use Popen for both modes so we can kill the child on Ctrl+C
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env=env,
+            text=True, env=env, start_new_session=True,
         )
     except FileNotFoundError:
         return False, "'claude' command not found"
 
-    posted = set()  # deduplicate progress comments
+    posted = set()  # deduplicate progress comments (verbose mode)
     result_text = ""
 
+    def _kill_child():
+        """Kill the child process group."""
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            pass
+
     try:
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        if verbose:
+            # Stream events and post progress to Todoist
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
-            # Parse tool_use events for progress updates
-            if event.get("type") == "assistant":
-                msg = event.get("message", {})
-                for block in msg.get("content", []):
-                    if block.get("type") == "tool_use":
-                        desc = _describe_tool_use(block["name"], block.get("input", {}))
-                        if desc and desc not in posted:
-                            posted.add(desc)
-                            print(f"  {desc}")
-                            if api and task_id:
-                                comment(api, task_id, desc)
+                if event.get("type") == "assistant":
+                    msg = event.get("message", {})
+                    for block in msg.get("content", []):
+                        if block.get("type") == "tool_use":
+                            desc = _describe_tool_use(block["name"], block.get("input", {}))
+                            if desc and desc not in posted:
+                                posted.add(desc)
+                                print(f"  {desc}")
+                                if api and task_id:
+                                    comment(api, task_id, desc)
 
-            # Parse final result
-            if event.get("type") == "result":
-                result_text = event.get("result", "")
+                if event.get("type") == "result":
+                    result_text = event.get("result", "")
 
         proc.wait(timeout=TASK_TIMEOUT)
+
+        if not verbose:
+            stdout = proc.stdout.read()
+            try:
+                output = json.loads(stdout)
+                result_text = output.get("result", "")
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    except KeyboardInterrupt:
+        print("\n  Interrupted — killing agent...")
+        _kill_child()
+        raise
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_child()
         return False, f"Timed out after {TASK_TIMEOUT}s"
 
     if proc.returncode == 0:
@@ -242,17 +237,17 @@ def main():
     if args.verbose:
         print("Verbose mode: progress updates will be posted to Todoist")
 
-    if args.watch:
-        print(f"Polling every {args.interval}s. Ctrl+C to stop.\n")
-        while True:
-            try:
+    try:
+        if args.watch:
+            print(f"Polling every {args.interval}s. Ctrl+C to stop.\n")
+            while True:
                 run_once(api, project_id, verbose=args.verbose)
                 time.sleep(args.interval)
-            except KeyboardInterrupt:
-                print("\nStopped.")
-                break
-    else:
-        run_once(api, project_id, verbose=args.verbose)
+        else:
+            run_once(api, project_id, verbose=args.verbose)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
