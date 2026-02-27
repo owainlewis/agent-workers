@@ -1,6 +1,12 @@
 # Background Agents
 
-Demo repo: Todoist as control plane, Python worker as dispatcher, Claude Code as the agent.
+You are an autonomous agent dispatched by a worker script. You receive tasks as natural language — interpret what's needed and use the right skill.
+
+## Rules
+
+- Do not wait for human input. Pick the best option and keep moving.
+- Save all content drafts to `workspace/linkedin/` with descriptive filenames.
+- After creating content, push a record to Airtable if `.env` has credentials.
 
 ## Available Skills
 
@@ -10,7 +16,7 @@ Demo repo: Todoist as control plane, Python worker as dispatcher, Claude Code as
 
 ## YouTube Tool
 
-Download transcripts and video metadata:
+Download transcripts:
 
 ```bash
 uv run tools/youtube.py get_transcript VIDEO_ID
@@ -18,20 +24,22 @@ uv run tools/youtube.py get_transcript VIDEO_ID
 
 ## Airtable CLI
 
-Run the Airtable CLI with repo-local paths:
-
 ```bash
 uv run .claude/skills/airtable/scripts/airtable.py <command>
 ```
-
-## Conventions
-
-- **Autonomous mode**: When dispatched by the agent worker, don't wait for human input. Pick the best option and keep moving.
-- **Drafts**: Save all content drafts to `workspace/linkedin/` with descriptive filenames.
-- **Airtable push**: After creating content, push a record to the "Content" table in Airtable with fields: Title, Body, Status="draft", Platform.
 
 ## Reference Files
 
 - `reference/brand.md` — Voice and positioning
 - `reference/pillars.md` — Content pillars and audiences
 - `reference/offers.md` — Offers and CTAs
+
+## How to Handle Tasks
+
+When you receive a task:
+
+1. Read the task description and determine what's being asked
+2. If it's about writing a LinkedIn post → follow `.claude/skills/linkedin-post/SKILL.md`
+3. If it mentions a YouTube video or URL → follow `.claude/skills/youtube-repurpose/SKILL.md`
+4. Always read the reference files for voice and positioning
+5. Save output to `workspace/` and push to Airtable

@@ -8,11 +8,12 @@
 Background agent worker — polls a Todoist project for tasks and dispatches them to Claude Code.
 
 Each Todoist project is an employee. Start a worker per project.
+The worker knows nothing about what the agent does. It passes the ticket
+as-is and lets Claude Code decide how to handle it using its skills and CLAUDE.md.
 
 Usage:
     uv run tools/agent_worker.py --project "LinkedIn Writer"
-    uv run tools/agent_worker.py --project "LinkedIn Writer" --watch
-    uv run tools/agent_worker.py --project "LinkedIn Writer" --watch --interval 60
+    uv run tools/agent_worker.py --project "LinkedIn Writer" --watch --verbose
 """
 
 import argparse
@@ -27,9 +28,7 @@ from todoist_api_python.api import TodoistAPI
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TASK_TIMEOUT = 300  # 5 minutes per task
-
-
-# --- Todoist helpers ---
+ALLOWED_TOOLS = ["Read", "Write", "Glob", "Grep", "Bash(uv run:*)"]
 
 
 def find_project_id(api: TodoistAPI, name: str) -> str | None:
@@ -50,132 +49,141 @@ def comment(api: TodoistAPI, task_id: str, message: str):
         print(f"  Warning: failed to add comment: {e}")
 
 
-# --- Prompt + dispatch ---
+def _describe_tool_use(name: str, input_data: dict) -> str | None:
+    """Turn a tool_use event into a short human-readable status line, or None to skip."""
+    if name == "Read":
+        path = input_data.get("file_path", "")
+        short = path.replace(str(REPO_ROOT) + "/", "")
+        if "skill" in short.lower() or "SKILL" in short:
+            return f"📖 Reading skill: {short}"
+        if "reference" in short.lower():
+            return f"📖 Reading reference: {short}"
+        return f"📖 Reading {short}"
+    if name == "Write":
+        path = input_data.get("file_path", "")
+        short = path.replace(str(REPO_ROOT) + "/", "")
+        return f"✍️ Writing {short}"
+    if name == "Bash":
+        cmd = input_data.get("command", "")
+        if "airtable" in cmd.lower():
+            return "📤 Pushing to Airtable"
+        if "youtube" in cmd.lower():
+            return "🎬 Fetching YouTube transcript"
+        return f"🔧 Running command"
+    if name == "Glob":
+        return f"🔍 Searching files"
+    if name == "Grep":
+        return f"🔍 Searching content"
+    return None
 
 
-def detect_skill(title: str) -> str:
-    """Detect which skill to use based on task title keywords."""
-    lower = title.lower()
-    # YouTube repurpose: look for youtube URLs or keywords
-    if "youtube.com" in lower or "youtu.be" in lower or "repurpose" in lower:
-        return "youtube-repurpose"
-    # Default to LinkedIn post
-    return "linkedin"
-
-
-PROMPTS = {
-    "linkedin": """Write a LinkedIn post about this topic using the linkedin-post skill.
-
-Topic: {topic}
-
-Instructions:
-1. Read .claude/skills/linkedin-post/SKILL.md and follow the Autonomous Mode instructions.
-2. Read reference/brand.md, reference/pillars.md, reference/offers.md for voice and positioning.
-3. Generate 3 hooks, pick the strongest, write the full post, self-review.
-4. Save the final draft to workspace/linkedin/ with a descriptive filename.
-5. Push the draft to Airtable using .claude/skills/airtable/scripts/airtable.py if .env has credentials.
-   Create a record in the "Content" table with fields: Title, Body, Status="draft", Platform="LinkedIn".
-""",
-    "youtube-repurpose": """Repurpose a YouTube video into LinkedIn posts using the youtube-repurpose skill.
-
-Input: {topic}
-
-Instructions:
-1. Read .claude/skills/youtube-repurpose/SKILL.md and follow all steps.
-2. Use `uv run tools/youtube.py get_transcript VIDEO_ID` to get the transcript.
-3. Extract 3 distinct angles from the transcript.
-4. Write 3 LinkedIn posts following .claude/skills/linkedin-post/SKILL.md.
-5. Save posts to workspace/linkedin/ and push to Airtable.
-""",
-}
-
-
-def build_prompt(title: str, description: str | None) -> str:
-    """Build the prompt that Claude Code will execute."""
-    topic = title
+def dispatch(title: str, description: str | None, *,
+             verbose: bool = False, api: TodoistAPI | None = None,
+             task_id: str | None = None) -> tuple[bool, str]:
+    """Pass the ticket to Claude Code. Returns (success, summary)."""
+    prompt = title
     if description:
-        topic += f"\n\nContext: {description}"
+        prompt += f"\n\n{description}"
 
-    skill = detect_skill(title)
-    template = PROMPTS[skill]
-    print(f"  Skill: {skill}")
-    return template.format(topic=topic)
-
-
-def dispatch_task(title: str, description: str | None) -> tuple[bool, str]:
-    """Invoke Claude Code with the task prompt. Returns (success, summary)."""
-    prompt = build_prompt(title, description)
-
-    allowed_tools = [
-        "Read",
-        "Write",
-        "Glob",
-        "Grep",
-        "Bash(uv run:*)",
-    ]
-
-    cmd = [
-        "claude",
-        "-p",
-        prompt,
-        "--model",
-        "sonnet",
-        "--output-format",
-        "json",
-    ]
-    for tool in allowed_tools:
+    output_format = "stream-json" if verbose else "json"
+    cmd = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", output_format]
+    if verbose:
+        cmd.append("--verbose")
+    for tool in ALLOWED_TOOLS:
         cmd.extend(["--allowedTools", tool])
 
     print("  Dispatching to Claude Code...")
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+
+    if not verbose:
+        # Simple mode: run and wait
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(REPO_ROOT), capture_output=True, text=True,
+                timeout=TASK_TIMEOUT, env=env,
+            )
+            if result.returncode == 0:
+                cost, result_text = "?", ""
+                try:
+                    output = json.loads(result.stdout)
+                    cost = output.get("cost_usd", "?")
+                    result_text = output.get("result", "")
+                except json.JSONDecodeError:
+                    pass
+                print(f"  Done. Cost: ${cost}")
+                summary = f"Cost: ${cost}"
+                if result_text:
+                    preview = result_text[:500] + ("..." if len(result_text) > 500 else "")
+                    summary += f"\n\n{preview}"
+                return True, summary
+            else:
+                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
+                print(f"  Failed (exit {result.returncode}): {error_msg}")
+                return False, f"Failed (exit {result.returncode}): {error_msg}"
+        except subprocess.TimeoutExpired:
+            return False, f"Timed out after {TASK_TIMEOUT}s"
+        except FileNotFoundError:
+            return False, "'claude' command not found"
+
+    # Verbose mode: stream events and post progress to Todoist
     try:
-        env = os.environ.copy()
-        env.pop(
-            "CLAUDECODE", None
-        )  # allow spawning claude from within a claude session
-        result = subprocess.run(
-            cmd,
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            timeout=TASK_TIMEOUT,
-            env=env,
+        proc = subprocess.Popen(
+            cmd, cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env,
         )
-        if result.returncode == 0:
-            cost = "?"
-            result_text = ""
-            try:
-                output = json.loads(result.stdout)
-                cost = output.get("cost_usd", "?")
-                result_text = output.get("result", "")
-            except json.JSONDecodeError:
-                pass
-            print(f"  Done. Cost: ${cost}")
-            summary = f"Cost: ${cost}"
-            if result_text:
-                # Truncate to keep comment readable
-                preview = result_text[:500]
-                if len(result_text) > 500:
-                    preview += "..."
-                summary += f"\n\n{preview}"
-            return True, summary
-        else:
-            error_msg = result.stderr[:500] if result.stderr else "Unknown error"
-            print(f"  Failed (exit {result.returncode})")
-            if result.stderr:
-                print(f"  stderr: {error_msg}")
-            return False, f"Failed (exit {result.returncode}): {error_msg}"
-    except subprocess.TimeoutExpired:
-        print(f"  Timed out after {TASK_TIMEOUT}s")
-        return False, f"Timed out after {TASK_TIMEOUT}s"
     except FileNotFoundError:
-        print("  Error: 'claude' not found. Is Claude Code installed?")
         return False, "'claude' command not found"
 
+    posted = set()  # deduplicate progress comments
+    cost, result_text = "?", ""
 
-# --- Main loop ---
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            # Parse tool_use events for progress updates
+            if event.get("type") == "assistant":
+                msg = event.get("message", {})
+                for block in msg.get("content", []):
+                    if block.get("type") == "tool_use":
+                        desc = _describe_tool_use(block["name"], block.get("input", {}))
+                        if desc and desc not in posted:
+                            posted.add(desc)
+                            print(f"  {desc}")
+                            if api and task_id:
+                                comment(api, task_id, desc)
+
+            # Parse final result
+            if event.get("type") == "result":
+                cost = event.get("total_cost_usd", "?")
+                result_text = event.get("result", "")
+
+        proc.wait(timeout=TASK_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return False, f"Timed out after {TASK_TIMEOUT}s"
+
+    if proc.returncode == 0:
+        print(f"  Done. Cost: ${cost}")
+        summary = f"Cost: ${cost}"
+        if result_text:
+            preview = result_text[:500] + ("..." if len(result_text) > 500 else "")
+            summary += f"\n\n{preview}"
+        return True, summary
+    else:
+        stderr = proc.stderr.read()[:500] if proc.stderr else "Unknown error"
+        print(f"  Failed (exit {proc.returncode}): {stderr}")
+        return False, f"Failed (exit {proc.returncode}): {stderr}"
 
 
-def run_once(api: TodoistAPI, project_id: str) -> int:
+def run_once(api: TodoistAPI, project_id: str, *, verbose: bool = False) -> int:
     """Process all pending tasks. Returns count processed."""
     tasks = []
     for page in api.get_tasks(project_id=project_id):
@@ -187,27 +195,23 @@ def run_once(api: TodoistAPI, project_id: str) -> int:
 
     processed = 0
     for task in tasks:
-        # Skip tasks already processed — waiting for human review
         if "agent-done" in (task.labels or []):
             continue
 
         print(f"\nTask: {task.content}")
-
-        # Comment: picked up
         comment(api, task.id, "🤖 Agent picked up this task. Working on it now...")
 
-        success, summary = dispatch_task(task.content, task.description)
+        success, summary = dispatch(
+            task.content, task.description,
+            verbose=verbose, api=api, task_id=task.id,
+        )
 
         if success:
-            # Comment: done — leave task open for human review, tag so we skip it next poll
             comment(api, task.id, f"✅ Done. Ready for review.\n\n{summary}")
-            api.update_task(
-                task_id=task.id, labels=[*(task.labels or []), "agent-done"]
-            )
+            api.update_task(task_id=task.id, labels=[*(task.labels or []), "agent-done"])
             print("  Done. Left open for review.")
             processed += 1
         else:
-            # Comment: failed
             comment(api, task.id, f"❌ Failed. Will retry next run.\n\n{summary}")
             print("  Skipped (will retry next run).")
 
@@ -216,18 +220,11 @@ def run_once(api: TodoistAPI, project_id: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Background agent worker")
-    parser.add_argument(
-        "--project",
-        required=True,
-        help="Todoist project name to watch (e.g. 'LinkedIn Writer')",
-    )
+    parser.add_argument("--project", required=True, help="Todoist project name to watch")
     parser.add_argument("--watch", action="store_true", help="Poll continuously")
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=30,
-        help="Poll interval in seconds (default: 30)",
-    )
+    parser.add_argument("--interval", type=int, default=30, help="Poll interval in seconds")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Stream progress updates to Todoist as the agent works")
     args = parser.parse_args()
 
     token = os.getenv("TODOIST_API_TOKEN")
@@ -235,41 +232,35 @@ def main():
         env_path = REPO_ROOT / ".env"
         if env_path.exists():
             for line in env_path.read_text().splitlines():
-                line = line.strip()
-                if line.startswith("TODOIST_API_TOKEN="):
-                    token = line.split("=", 1)[1].strip().strip("'\"")
+                if line.strip().startswith("TODOIST_API_TOKEN="):
+                    token = line.strip().split("=", 1)[1].strip().strip("'\"")
                     break
 
     if not token:
-        print(
-            "Error: TODOIST_API_TOKEN not set. Add it to .env or export it.",
-            file=sys.stderr,
-        )
+        print("Error: TODOIST_API_TOKEN not set. Add it to .env or export it.", file=sys.stderr)
         sys.exit(1)
 
     api = TodoistAPI(token)
-
     project_id = find_project_id(api, args.project)
     if not project_id:
-        print(
-            f"Error: No '{args.project}' project found in Todoist. Create one first.",
-            file=sys.stderr,
-        )
+        print(f"Error: No '{args.project}' project found in Todoist.", file=sys.stderr)
         sys.exit(1)
 
     print(f"Watching project: {args.project} (id: {project_id})")
+    if args.verbose:
+        print("Verbose mode: progress updates will be posted to Todoist")
 
     if args.watch:
-        print(f"Watching every {args.interval}s. Ctrl+C to stop.\n")
+        print(f"Polling every {args.interval}s. Ctrl+C to stop.\n")
         while True:
             try:
-                run_once(api, project_id)
+                run_once(api, project_id, verbose=args.verbose)
                 time.sleep(args.interval)
             except KeyboardInterrupt:
                 print("\nStopped.")
                 break
     else:
-        run_once(api, project_id)
+        run_once(api, project_id, verbose=args.verbose)
 
 
 if __name__ == "__main__":
