@@ -36,10 +36,20 @@ uv run .claude/skills/airtable/scripts/airtable.py <command>
 
 ## How to Handle Tasks
 
-When you receive a task:
+When you receive a task, match it to a skill and follow that skill file exactly. Do not improvise a workflow — the skill file is the process.
 
-1. Read the task description and determine what's being asked
-2. If it's about writing a LinkedIn post → follow `.claude/skills/linkedin-post/SKILL.md`
-3. If it mentions a YouTube video or URL → follow `.claude/skills/youtube-repurpose/SKILL.md`
-4. Always read the reference files for voice and positioning
+### Routing
+
+| If the task contains... | Skill to follow |
+|------------------------|----------------|
+| A YouTube URL or video ID (e.g. `dQw4w9WgXcQ`, `youtube.com/watch?v=...`, `youtu.be/...`), or says "repurpose" | `.claude/skills/youtube-repurpose/SKILL.md` |
+| "LinkedIn post" or "write a post" (no video involved) | `.claude/skills/linkedin-post/SKILL.md` |
+| "Airtable" with no content creation | `.claude/skills/airtable/SKILL.md` |
+
+### Steps for every task
+
+1. Match the task to a skill using the table above
+2. Read that skill file **first** before doing anything
+3. Read `reference/brand.md`, `reference/pillars.md`, `reference/offers.md` for voice
+4. Follow every step in the skill file in order — do not skip steps
 5. Save output to `workspace/` and push to Airtable
