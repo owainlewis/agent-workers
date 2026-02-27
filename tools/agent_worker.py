@@ -104,18 +104,14 @@ def dispatch(title: str, description: str | None, *,
                 timeout=TASK_TIMEOUT, env=env,
             )
             if result.returncode == 0:
-                cost, result_text = "?", ""
+                result_text = ""
                 try:
                     output = json.loads(result.stdout)
-                    cost = output.get("cost_usd", "?")
                     result_text = output.get("result", "")
                 except json.JSONDecodeError:
                     pass
-                print(f"  Done. Cost: ${cost}")
-                summary = f"Cost: ${cost}"
-                if result_text:
-                    preview = result_text[:500] + ("..." if len(result_text) > 500 else "")
-                    summary += f"\n\n{preview}"
+                print("  Done.")
+                summary = result_text[:500] + ("..." if len(result_text) > 500 else "") if result_text else "Completed."
                 return True, summary
             else:
                 error_msg = result.stderr[:500] if result.stderr else "Unknown error"
@@ -136,7 +132,7 @@ def dispatch(title: str, description: str | None, *,
         return False, "'claude' command not found"
 
     posted = set()  # deduplicate progress comments
-    cost, result_text = "?", ""
+    result_text = ""
 
     try:
         for line in proc.stdout:
@@ -162,7 +158,6 @@ def dispatch(title: str, description: str | None, *,
 
             # Parse final result
             if event.get("type") == "result":
-                cost = event.get("total_cost_usd", "?")
                 result_text = event.get("result", "")
 
         proc.wait(timeout=TASK_TIMEOUT)
@@ -171,11 +166,8 @@ def dispatch(title: str, description: str | None, *,
         return False, f"Timed out after {TASK_TIMEOUT}s"
 
     if proc.returncode == 0:
-        print(f"  Done. Cost: ${cost}")
-        summary = f"Cost: ${cost}"
-        if result_text:
-            preview = result_text[:500] + ("..." if len(result_text) > 500 else "")
-            summary += f"\n\n{preview}"
+        print("  Done.")
+        summary = result_text[:500] + ("..." if len(result_text) > 500 else "") if result_text else "Completed."
         return True, summary
     else:
         stderr = proc.stderr.read()[:500] if proc.stderr else "Unknown error"
