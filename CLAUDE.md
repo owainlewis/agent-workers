@@ -5,7 +5,16 @@ Demo repo: Todoist as control plane, Python worker as dispatcher, Claude Code as
 ## Available Skills
 
 - **LinkedIn Post** — `.claude/skills/linkedin-post/SKILL.md` — Write LinkedIn posts (hooks-first process with autonomous mode)
+- **YouTube Repurpose** — `.claude/skills/youtube-repurpose/SKILL.md` — Repurpose a YouTube video into 3 LinkedIn posts + push to Airtable
 - **Airtable** — `.claude/skills/airtable/SKILL.md` — CRUD operations on Airtable via CLI
+
+## YouTube Tool
+
+Download transcripts and video metadata:
+
+```bash
+uv run tools/youtube.py get_transcript VIDEO_ID
+```
 
 ## Airtable CLI
 

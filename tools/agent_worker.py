@@ -53,13 +53,18 @@ def comment(api: TodoistAPI, task_id: str, message: str):
 # --- Prompt + dispatch ---
 
 
-def build_prompt(title: str, description: str | None) -> str:
-    """Build the prompt that Claude Code will execute."""
-    topic = title
-    if description:
-        topic += f"\n\nContext: {description}"
+def detect_skill(title: str) -> str:
+    """Detect which skill to use based on task title keywords."""
+    lower = title.lower()
+    # YouTube repurpose: look for youtube URLs or keywords
+    if "youtube.com" in lower or "youtu.be" in lower or "repurpose" in lower:
+        return "youtube-repurpose"
+    # Default to LinkedIn post
+    return "linkedin"
 
-    return f"""Write a LinkedIn post about this topic using the linkedin-post skill.
+
+PROMPTS = {
+    "linkedin": """Write a LinkedIn post about this topic using the linkedin-post skill.
 
 Topic: {topic}
 
@@ -70,7 +75,31 @@ Instructions:
 4. Save the final draft to workspace/linkedin/ with a descriptive filename.
 5. Push the draft to Airtable using .claude/skills/airtable/scripts/airtable.py if .env has credentials.
    Create a record in the "Content" table with fields: Title, Body, Status="draft", Platform="LinkedIn".
-"""
+""",
+    "youtube-repurpose": """Repurpose a YouTube video into LinkedIn posts using the youtube-repurpose skill.
+
+Input: {topic}
+
+Instructions:
+1. Read .claude/skills/youtube-repurpose/SKILL.md and follow all steps.
+2. Use `uv run tools/youtube.py get_transcript VIDEO_ID` to get the transcript.
+3. Extract 3 distinct angles from the transcript.
+4. Write 3 LinkedIn posts following .claude/skills/linkedin-post/SKILL.md.
+5. Save posts to workspace/linkedin/ and push to Airtable.
+""",
+}
+
+
+def build_prompt(title: str, description: str | None) -> str:
+    """Build the prompt that Claude Code will execute."""
+    topic = title
+    if description:
+        topic += f"\n\nContext: {description}"
+
+    skill = detect_skill(title)
+    template = PROMPTS[skill]
+    print(f"  Skill: {skill}")
+    return template.format(topic=topic)
 
 
 def dispatch_task(title: str, description: str | None) -> tuple[bool, str]:
