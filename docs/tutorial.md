@@ -16,37 +16,34 @@ AI agents can do that kind of work. The missing piece is the control plane — h
 
 There are three levels to how people work with AI agents. It maps to how managers work with people.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│  Level 1: Micromanaging                                         │
-│                                                                 │
-│  You sit in a chat window, type a prompt, wait for a response,  │
-│  type another prompt. You're there the whole time.              │
-│                                                                 │
-│  It's like standing over someone's shoulder telling them what   │
-│  to do line by line. You're doing the work together.            │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Level 2: Delegating  ◄── this is what we're building           │
-│                                                                 │
-│  You hand off a task, walk away, and the agent does the work    │
-│  in the background. When it's done, it reports back and you     │
-│  review the result.                                             │
-│                                                                 │
-│  Like giving a brief to a team member and checking in when      │
-│  they're finished. This is what OpenClaw does.                  │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Level 3: Running a Team                                        │
-│                                                                 │
-│  Multiple agents working together on complex work — one does    │
-│  research, another writes, another reviews. That's the          │
-│  frontier, but we're not there yet for most use cases.          │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph L1["Level 1: Micromanaging"]
+        direction LR
+        A1["You"] -- "prompt" --> A2["AI"]
+        A2 -- "response" --> A1
+    end
+
+    subgraph L2["Level 2: Delegating ← what we're building"]
+        direction LR
+        B1["You"] -- "assign task" --> B2["Worker"]
+        B2 -- "dispatch" --> B3["Agent"]
+        B3 -- "draft ready" --> B1
+    end
+
+    subgraph L3["Level 3: Running a Team"]
+        direction LR
+        C1["You"] -- "goals" --> C2["Orchestrator"]
+        C2 --> C3["Agent 1"]
+        C2 --> C4["Agent 2"]
+        C2 --> C5["Agent 3"]
+    end
+
+    L1 ~~~ L2 ~~~ L3
+
+    style L1 fill:#fee,stroke:#c33
+    style L2 fill:#efe,stroke:#3a3
+    style L3 fill:#eef,stroke:#33c
 ```
 
 OpenClaw is a level two system. So is what we're building. The difference is ownership, security, and simplicity.
@@ -55,17 +52,26 @@ OpenClaw is a level two system. So is what we're building. The difference is own
 
 When you decompose any level-two agent system, it has three components:
 
-```
-┌─────────────────┐        poll         ┌──────────────────┐       invoke       ┌─────────────┐
-│   CONTROL PLANE │  ◄────────────────  │   AGENT WORKER   │  ───────────────►  │   AI AGENT  │
-│                 │                     │                   │                    │             │
-│  You add tasks  │  ──────────────────►│  Polls for tasks  │  ◄───────────────  │ Does work   │
-│  from anywhere  │   report status     │  Dispatches work  │   returns results  │ Saves output│
-└─────────────────┘                     └──────────────────┘                    └─────────────┘
-       ▲                                                                              │
-       │                            ┌──────────────┐                                  │
-       └────── you review ────────  │   RESULTS    │  ◄──────── pushes output ────────┘
-                                    └──────────────┘
+```mermaid
+graph LR
+    You["📱 You"]
+    CP["📋 Control Plane"]
+    W["⚙️ Worker"]
+    Agent["🤖 AI Agent"]
+    Out["📦 Results"]
+
+    You -->|"add task"| CP
+    W -->|"poll"| CP
+    W -->|"dispatch"| Agent
+    Agent -->|"save output"| Out
+    W -->|"report status"| CP
+    You -->|"review"| Out
+
+    style You fill:#f5f5ff,stroke:#6366f1,stroke-width:2px
+    style CP fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    style W fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
+    style Agent fill:#fdf2f8,stroke:#ec4899,stroke-width:2px
+    style Out fill:#f0f9ff,stroke:#3b82f6,stroke-width:2px
 ```
 
 **Control plane** — Where you assign tasks. This is how you tell agents what to do without sitting in a chat window.
@@ -107,27 +113,29 @@ Any task management tool works. Todoist, Linear, Asana, GitHub Issues, a databas
 
 Think of each project in your task queue as an employee with a specific job.
 
-```
-┌──────────────────────────────────────────────────────┐
-│                    TODOIST                            │
-│                                                      │
-│  ┌─────────────────┐  ┌──────────────┐  ┌─────────┐ │
-│  │ LinkedIn Writer  │  │ Code Reviewer│  │Research │ │
-│  │  (3 tasks)       │  │  (1 task)    │  │(2 tasks)│ │
-│  └────────┬─────────┘  └──────┬───────┘  └────┬────┘ │
-└───────────┼────────────────────┼────────────────┼─────┘
-            │                    │                │
-            ▼                    ▼                ▼
-     ┌──────────────┐   ┌──────────────┐  ┌──────────────┐
-     │ Worker        │   │ Worker        │  │ Worker        │
-     │ (linkedin     │   │ (review       │  │ (research     │
-     │  skills)      │   │  skills)      │  │  skills)      │
-     └──────┬────────┘   └──────┬────────┘  └──────┬────────┘
-            │                    │                │
-            ▼                    ▼                ▼
-     ┌──────────────┐   ┌──────────────┐  ┌──────────────┐
-     │ Claude Code   │   │ Claude Code   │  │ Claude Code   │
-     └──────────────┘   └──────────────┘  └──────────────┘
+```mermaid
+graph TD
+    subgraph Todoist["📋 Todoist"]
+        P1["LinkedIn Writer<br/>(3 tasks)"]
+        P2["Code Reviewer<br/>(1 task)"]
+        P3["Research<br/>(2 tasks)"]
+    end
+
+    P1 --> W1["⚙️ Worker"]
+    P2 --> W2["⚙️ Worker"]
+    P3 --> W3["⚙️ Worker"]
+
+    W1 --> C1["🤖 Claude Code<br/>(linkedin skills)"]
+    W2 --> C2["🤖 Claude Code<br/>(review skills)"]
+    W3 --> C3["🤖 Claude Code<br/>(research skills)"]
+
+    style Todoist fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    style W1 fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
+    style W2 fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
+    style W3 fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
+    style C1 fill:#fdf2f8,stroke:#ec4899,stroke-width:2px
+    style C2 fill:#fdf2f8,stroke:#ec4899,stroke-width:2px
+    style C3 fill:#fdf2f8,stroke:#ec4899,stroke-width:2px
 ```
 
 Each project has its own worker. Each worker dispatches to Claude Code with different skills and permissions. Adding a task is like putting a brief on someone's desk.

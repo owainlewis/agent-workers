@@ -8,45 +8,55 @@ You assign tasks from your phone. Agents do the work in the background. You revi
 
 Most people are stuck at level one. This repo gets you to level two.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│  Level 1: Micromanaging                                         │
-│  You sit in a chat window prompting back and forth.             │
-│  You're there the whole time. Like standing over someone's      │
-│  shoulder telling them what to do line by line.                  │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Level 2: Delegating  ◄── this repo                             │
-│  You hand off a task and walk away. The agent does the work     │
-│  in the background, reports back, and you review the result.    │
-│  Like giving a brief to a team member.                          │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Level 3: Running a Team                                        │
-│  Multiple agents collaborating — one researches, another        │
-│  writes, another reviews. The frontier.                         │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+    columns 1
+    block:L1["Level 1: Micromanaging"]
+        columns 3
+        A["You"] -- "prompt" --> B["AI Agent"] -- "response" --> A
+    end
+    space
+    block:L2["Level 2: Delegating ← this repo"]
+        columns 4
+        C["You"] -- "assign task" --> D["Worker"] -- "dispatch" --> E["Agent"]
+        E -- "draft ready" --> C
+    end
+    space
+    block:L3["Level 3: Running a Team"]
+        columns 5
+        F["You"] -- "goals" --> G["Orchestrator"]
+        G --> H["Agent 1"]
+        G --> I["Agent 2"]
+        G --> J["Agent 3"]
+    end
+
+    style L1 fill:#fee,stroke:#c33
+    style L2 fill:#efe,stroke:#3a3
+    style L3 fill:#eef,stroke:#33c
 ```
 
 ## How It Works
 
-```
-┌─────────────────┐        poll         ┌──────────────────┐       invoke       ┌─────────────┐
-│   CONTROL PLANE │  ◄────────────────  │   AGENT WORKER   │  ───────────────►  │ CLAUDE CODE │
-│   (Todoist)     │   Todoist SDK       │   (Python script) │   claude -p        │ (does work) │
-│                 │                     │                   │                    │             │
-│  You add tasks  │  ──────────────────►│  Polls for tasks  │  ◄───────────────  │ Runs skills │
-│  from anywhere  │   comment + label   │  Dispatches work  │   returns results  │ Saves output│
-└─────────────────┘                     └──────────────────┘                    └─────────────┘
-       ▲                                                                              │
-       │                            ┌──────────────┐                                  │
-       └────── you review ────────  │   RESULTS    │  ◄──────── pushes output ────────┘
-                                    │  (Airtable)  │
-                                    └──────────────┘
+```mermaid
+graph LR
+    You["📱 You<br/>(phone, laptop, anywhere)"]
+    Todoist["📋 Todoist<br/>(control plane)"]
+    Worker["⚙️ Worker<br/>(Python script)"]
+    Claude["🤖 Claude Code<br/>(does the work)"]
+    Output["📦 Results<br/>(Airtable + workspace/)"]
+
+    You -->|"add task"| Todoist
+    Worker -->|"poll for tasks"| Todoist
+    Worker -->|"claude -p"| Claude
+    Claude -->|"save output"| Output
+    Worker -->|"comment + label"| Todoist
+    You -->|"review draft"| Output
+
+    style You fill:#f5f5ff,stroke:#6366f1,stroke-width:2px
+    style Todoist fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    style Worker fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
+    style Claude fill:#fdf2f8,stroke:#ec4899,stroke-width:2px
+    style Output fill:#f0f9ff,stroke:#3b82f6,stroke-width:2px
 ```
 
 Three components:
