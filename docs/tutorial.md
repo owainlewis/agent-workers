@@ -24,7 +24,7 @@ graph TD
         A2 -- "response" --> A1
     end
 
-    subgraph L2["Level 2: Delegating ← what we're building"]
+    subgraph L2["Level 2: Delegating ← this repo"]
         direction LR
         B1["You"] -- "assign task" --> B2["Worker"]
         B2 -- "dispatch" --> B3["Agent"]
