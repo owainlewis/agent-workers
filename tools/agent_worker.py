@@ -109,7 +109,7 @@ def dispatch(title: str, description: str | None, *,
     except FileNotFoundError:
         return False, "'claude' command not found"
 
-    posted = set()  # deduplicate progress comments (verbose mode)
+    seen = set()  # deduplicate verbose output
     result_text = ""
 
     def _kill_child():
@@ -121,7 +121,7 @@ def dispatch(title: str, description: str | None, *,
 
     try:
         if verbose:
-            # Stream events and post progress to Todoist
+            # Stream events to terminal only (not Todoist)
             for line in proc.stdout:
                 line = line.strip()
                 if not line:
@@ -136,11 +136,9 @@ def dispatch(title: str, description: str | None, *,
                     for block in msg.get("content", []):
                         if block.get("type") == "tool_use":
                             desc = _describe_tool_use(block["name"], block.get("input", {}))
-                            if desc and desc not in posted:
-                                posted.add(desc)
+                            if desc and desc not in seen:
+                                seen.add(desc)
                                 print(f"  {desc}")
-                                if api and task_id:
-                                    comment(api, task_id, desc)
 
                 if event.get("type") == "result":
                     result_text = event.get("result", "")
