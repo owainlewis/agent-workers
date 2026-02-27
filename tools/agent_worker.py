@@ -5,12 +5,14 @@
 # ]
 # ///
 """
-Background agent worker — polls Todoist for tasks and dispatches them to Claude Code.
+Background agent worker — polls a Todoist project for tasks and dispatches them to Claude Code.
+
+Each Todoist project is an employee. Start a worker per project.
 
 Usage:
-    uv run tools/agent_worker.py              # process once and exit
-    uv run tools/agent_worker.py --watch      # poll every 30s
-    uv run tools/agent_worker.py --watch --interval 60
+    uv run tools/agent_worker.py --project "LinkedIn Writer"
+    uv run tools/agent_worker.py --project "LinkedIn Writer" --watch
+    uv run tools/agent_worker.py --project "LinkedIn Writer" --watch --interval 60
 """
 
 import argparse
@@ -27,11 +29,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TASK_TIMEOUT = 300  # 5 minutes per task
 
 
-def get_agent_project_id(api: TodoistAPI) -> str | None:
-    """Find the 'Agent' project in Todoist."""
+def find_project_id(api: TodoistAPI, name: str) -> str | None:
+    """Find a Todoist project by name (case-insensitive)."""
+    target = name.lower()
     for page in api.get_projects():
         for project in page:
-            if project.name.lower() == "agent":
+            if project.name.lower() == target:
                 return project.id
     return None
 
@@ -132,6 +135,7 @@ def run_once(api: TodoistAPI, project_id: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Background agent worker")
+    parser.add_argument("--project", required=True, help="Todoist project name to watch (e.g. 'LinkedIn Writer')")
     parser.add_argument("--watch", action="store_true", help="Poll continuously")
     parser.add_argument("--interval", type=int, default=30, help="Poll interval in seconds (default: 30)")
     args = parser.parse_args()
@@ -152,12 +156,12 @@ def main():
 
     api = TodoistAPI(token)
 
-    project_id = get_agent_project_id(api)
+    project_id = find_project_id(api, args.project)
     if not project_id:
-        print("Error: No 'Agent' project found in Todoist. Create one first.", file=sys.stderr)
+        print(f"Error: No '{args.project}' project found in Todoist. Create one first.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Agent project found (id: {project_id})")
+    print(f"Watching project: {args.project} (id: {project_id})")
 
     if args.watch:
         print(f"Watching every {args.interval}s. Ctrl+C to stop.\n")
