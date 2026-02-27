@@ -9,30 +9,31 @@ You assign tasks from your phone. Agents do the work in the background. You revi
 Most people are stuck at level one. This repo gets you to level two.
 
 ```mermaid
-block-beta
-    columns 1
-    block:L1["Level 1: Micromanaging"]
-        columns 3
-        A["You"] -- "prompt" --> B["AI Agent"] -- "response" --> A
-    end
-    space
-    block:L2["Level 2: Delegating ← this repo"]
-        columns 4
-        C["You"] -- "assign task" --> D["Worker"] -- "dispatch" --> E["Agent"]
-        E -- "draft ready" --> C
-    end
-    space
-    block:L3["Level 3: Running a Team"]
-        columns 5
-        F["You"] -- "goals" --> G["Orchestrator"]
-        G --> H["Agent 1"]
-        G --> I["Agent 2"]
-        G --> J["Agent 3"]
+graph TD
+    subgraph L1["🔴 Level 1: Micromanaging"]
+        direction LR
+        A1["You"] -- "prompt → response → prompt → ..." --> A2["AI"]
     end
 
-    style L1 fill:#fee,stroke:#c33
-    style L2 fill:#efe,stroke:#3a3
-    style L3 fill:#eef,stroke:#33c
+    subgraph L2["🟢 Level 2: Delegating — this repo"]
+        direction LR
+        B1["You"] -- "assign task" --> B2["Worker"] -- "dispatch" --> B3["Agent"]
+        B3 -. "draft ready" .-> B1
+    end
+
+    subgraph L3["🔵 Level 3: Running a Team"]
+        direction LR
+        C1["You"] -- "set goals" --> C2["Orchestrator"]
+        C2 --> C3["Agent 1"]
+        C2 --> C4["Agent 2"]
+        C2 --> C5["Agent 3"]
+    end
+
+    L1 ~~~ L2 ~~~ L3
+
+    style L1 fill:#fff5f5,stroke:#ef4444,stroke-width:2px
+    style L2 fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
+    style L3 fill:#eff6ff,stroke:#3b82f6,stroke-width:2px
 ```
 
 ## How It Works
