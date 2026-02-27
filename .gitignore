@@ -2,3 +2,7 @@
 workspace/
 __pycache__/
 *.pyc
+.claude/skills/linkedin-post/
+.claude/agents/linkedin-writer.md
+.claude/agents/linkedin-reviewer.md
+reference/
