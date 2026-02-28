@@ -1,6 +1,6 @@
 # Background Agents: The Pattern
 
-You don't need a framework to run AI agents in the background. You need three things: a place to assign tasks, a worker script, and an agent. This tutorial walks through the pattern and a working implementation in ~100 lines of Python.
+You don't need a framework to run AI agents in the background. You need three things: a place to assign tasks, a worker script, and an agent. This tutorial walks through the pattern and a working implementation in a single Python file.
 
 ## The Problem
 
@@ -90,11 +90,11 @@ Every component in OpenClaw is replaceable with something simpler and more secur
 |--|----------|-----------|
 | **Control plane** | Custom Telegram bot | Todoist — battle-tested UI on every device |
 | **Task queue** | Internal database / Redis | Todoist project — visual and auditable |
-| **Worker** | Dockerised orchestration | Python script (~100 lines) |
-| **Security** | Framework-level permissions | OS-level `--allowedTools` per task |
+| **Worker** | Dockerised orchestration | Single Python file |
+| **Security** | Framework-level permissions | Subprocess isolation — agent runs in a child process with env vars stripped |
 | **Cost of polling** | Agent running continuously | Plain Python, zero tokens until real work |
 
-The security difference matters. OpenClaw is an open-source framework with access to your codebase, APIs, and credentials. The security model is "trust this project." We use `--allowedTools` to scope exactly what the agent can access per task — OS-level sandboxing, not framework-level trust.
+The security difference matters. OpenClaw is an open-source framework with access to your codebase, APIs, and credentials. The security model is "trust this project." We run each task in a subprocess with sensitive env vars stripped — OS-level process isolation, not framework-level trust.
 
 ## Why a Task Queue?
 
@@ -144,9 +144,9 @@ Each project has its own worker. Each worker dispatches to Claude Code with diff
 
 This repo uses Todoist as the control plane and Claude Code as the agent. Here's how each piece works.
 
-### 1. The Worker (~100 lines)
+### 1. The Worker
 
-`tools/agent_worker.py` is the entire backend. It's deliberately simple — a dumb bridge between your to-do list and the agent.
+`agent_worker.py` is the entire backend. It's deliberately simple — a dumb bridge between your to-do list and the agent.
 
 The worker doesn't build complex prompts. It doesn't decide which skill to use. It takes the task title and description — the exact text you typed into Todoist — and passes it straight to Claude Code. The agent figures out what to do from its `CLAUDE.md`.
 
@@ -154,7 +154,7 @@ Core loop:
 
 1. **Poll** — Fetch open tasks from a Todoist project (skip tasks labeled `agent-done`)
 2. **Comment** — Post "working on it" so you can see progress in Todoist
-3. **Dispatch** — Run `claude -p` with the task text and scoped permissions
+3. **Dispatch** — Run `claude -p` with the task text
 4. **Report** — Comment "done" with a summary, add `agent-done` label
 5. **Leave open** — You review the output and close it when you're satisfied
 
@@ -165,7 +165,6 @@ An important design decision: the polling is deterministic code — plain Python
 Claude Code runs headless via `claude -p`. It receives:
 
 - The task text as a prompt
-- `--allowedTools` restricting what it can access
 - `--model sonnet` for cost efficiency
 - A working directory containing skill files and reference docs
 
@@ -175,20 +174,16 @@ The skill files (`.claude/skills/linkedin-post/SKILL.md`) define the actual proc
 
 ### 3. The Security Model
 
-Each dispatched task runs with scoped permissions:
+Each dispatched task runs in a subprocess with sensitive environment variables stripped:
 
-```
---allowedTools Read Write Glob Grep "Bash(uv run:*)"
-```
+- `ANTHROPIC_API_KEY` — removed so the agent uses the Claude Code subscription, not API credits
+- `CLAUDECODE` — removed to avoid leaking internal state
 
-- **Read/Write/Glob/Grep** — File operations within the repo
-- **Bash(uv run:\*)** — Only `uv run` commands (for the Airtable CLI)
-
-No unrestricted shell. No `rm`. No `curl`. No network access except through scoped CLI scripts. If the agent tries to run something outside this scope, it gets blocked.
+The worker starts Claude Code as a child process with `start_new_session=True` for clean process group management. There are no framework-level permission grants — just OS-level process isolation.
 
 ### 4. Verbose Mode (Real-Time Progress)
 
-Run with `--verbose` and the worker posts live progress updates to the Todoist task:
+Run with `--verbose` and the worker streams live progress to the terminal:
 
 ```
 📖 Reading skill: .claude/skills/linkedin-post/SKILL.md
@@ -198,7 +193,7 @@ Run with `--verbose` and the worker posts live progress updates to the Todoist t
 ✅ Done. Ready for review.
 ```
 
-The worker parses Claude Code's streaming JSON output and translates tool calls into human-readable status lines. You can watch the agent work from your phone.
+The worker parses Claude Code's streaming JSON output and translates tool calls into human-readable status lines. In `--watch` mode, output is also written to `agent_worker.log`.
 
 ### 5. The Delivery Target
 
@@ -236,13 +231,16 @@ Add a task to the Agent project from the Todoist app, web, or CLI:
 
 ```bash
 # Process once and exit
-uv run tools/agent_worker.py --project "Agent"
+uv run agent_worker.py --project "Agent"
 
 # Watch continuously
-uv run tools/agent_worker.py --project "Agent" --watch
+uv run agent_worker.py --project "Agent" --watch
 
-# Watch with live progress on tickets
-uv run tools/agent_worker.py --project "Agent" --watch --verbose
+# Watch with live progress in terminal
+uv run agent_worker.py --project "Agent" --watch --verbose
+
+# Custom timeout (10 minutes per task)
+uv run agent_worker.py --project "Agent" --timeout 600
 ```
 
 The worker picks up the task, dispatches to Claude Code, and comments back on the ticket when it's done. The task stays open — you review the draft in `workspace/linkedin/` or Airtable, then close the task yourself.
@@ -252,8 +250,8 @@ The worker picks up the task, dispatches to Claude Code, and comments back on th
 Run multiple workers in separate terminals:
 
 ```bash
-uv run tools/agent_worker.py --project "LinkedIn Writer" --watch
-uv run tools/agent_worker.py --project "Code Reviewer" --watch
+uv run agent_worker.py --project "LinkedIn Writer" --watch
+uv run agent_worker.py --project "Code Reviewer" --watch
 ```
 
 Each one watches its own project with its own skills and permissions.
@@ -272,7 +270,7 @@ The pattern works with anything that has an API:
 | Airtable | Filter by status field | Update status to "review" |
 | PostgreSQL | `SELECT WHERE status = 'pending'` | `UPDATE SET status = 'review'` |
 
-Replace the `TodoistAPI` calls in the worker and the rest stays the same.
+Replace the `TodoistQueue` class in the worker and the rest stays the same.
 
 ### Different agents
 
@@ -296,7 +294,7 @@ The agent never publishes, merges, or sends anything directly. There's always a 
 
 **Start with low-stakes tasks.** Content drafts. Research summaries. Code review flags. Tasks where bad output costs you five minutes of review, not a production incident. Expand the scope as you build confidence.
 
-**Scope the tools.** `--allowedTools` controls exactly what the agent can access. Start narrow.
+**Subprocess isolation.** Each task runs in a child process with sensitive env vars stripped. The agent can't access your API keys or internal state.
 
 **Budget ceilings.** Track token usage per task. Set a daily spend limit. You don't want to discover a runaway agent by looking at your API bill.
 

@@ -6,3 +6,6 @@ __pycache__/
 .claude/agents/linkedin-writer.md
 .claude/agents/linkedin-reviewer.md
 reference/
+agent_worker.log
+extract_posts.py
+tmp_push_posts.py

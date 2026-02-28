@@ -1,6 +1,6 @@
 # Background Agents
 
-A secure, reliable alternative to OpenClaw in ~100 lines of Python.
+A secure, reliable alternative to OpenClaw in a single Python file.
 
 You assign tasks from your phone. Agents do the work in the background. You review the results when you're ready.
 
@@ -74,8 +74,8 @@ The worker is a dumb bridge. It doesn't decide what to do — it just passes you
 |--|----------|-----------|
 | **Control plane** | Custom Telegram bot | Todoist — battle-tested UI on every device |
 | **Task queue** | Internal database / Redis | Todoist project — visual and auditable |
-| **Worker** | Dockerised orchestration | Python script (~100 lines) |
-| **Security** | Framework-level permissions | OS-level `--allowedTools` per task |
+| **Worker** | Dockerised orchestration | Single Python file |
+| **Security** | Framework-level permissions | Subprocess isolation — agent runs in a child process with env vars stripped |
 | **Cost model** | Always running | Polls with plain code, agent only when needed |
 
 ## Quick Start
@@ -91,7 +91,7 @@ cp .env.example .env
 # Create a project called "Agent" in Todoist, then add a task via the app or CLI
 
 # 3. Run the worker
-uv run tools/agent_worker.py --project "Agent"
+uv run agent_worker.py --project "Agent"
 ```
 
 The worker finds the task, comments "working on it", dispatches to Claude Code, then comments "done" and adds the `agent-done` label. The task stays open — you review the output and close it yourself.
@@ -99,38 +99,40 @@ The worker finds the task, comments "working on it", dispatches to Claude Code, 
 ### Continuous polling
 
 ```bash
-uv run tools/agent_worker.py --project "Agent" --watch
+uv run agent_worker.py --project "Agent" --watch
 ```
 
-### Verbose mode (real-time progress on tickets)
+### Verbose mode (real-time progress in terminal)
 
 ```bash
-uv run tools/agent_worker.py --project "Agent" --watch --verbose
+uv run agent_worker.py --project "Agent" --watch --verbose
 ```
 
-In verbose mode, the worker posts live progress updates to the Todoist task as the agent works — reading files, writing drafts, pushing to Airtable.
+In verbose mode, the worker streams live progress to the terminal as the agent works — reading files, writing drafts, pushing to Airtable.
+
+### Custom timeout
+
+```bash
+uv run agent_worker.py --project "Agent" --timeout 600
+```
 
 ## Multiple Agents
 
 Each Todoist project is an employee. Run one worker per project:
 
 ```bash
-uv run tools/agent_worker.py --project "LinkedIn Writer" --watch
-uv run tools/agent_worker.py --project "Code Reviewer" --watch
-uv run tools/agent_worker.py --project "Research" --watch
+uv run agent_worker.py --project "LinkedIn Writer" --watch
+uv run agent_worker.py --project "Code Reviewer" --watch
+uv run agent_worker.py --project "Research" --watch
 ```
 
-Your task manager becomes a dispatch centre for a team of agents.
+Your task manager becomes a dispatch centre for a team of agents. Each worker processes tasks sequentially — scaling is one worker per project, not parallelism within a worker.
 
 ## The Security Model
 
-Every task runs with scoped permissions via `--allowedTools`:
+Each dispatched task runs in a subprocess with sensitive environment variables (`ANTHROPIC_API_KEY`, `CLAUDECODE`) stripped. The agent uses the Claude Code subscription plan, not API credits. The worker starts Claude Code as a child process — there are no framework-level permission grants, just OS-level process isolation.
 
-```
---allowedTools Read Write Glob Grep "Bash(uv run:*)"
-```
-
-The agent can read and write files, search the codebase, and run `uv run` commands (for the Airtable CLI). No unrestricted shell, no network access, no `rm`. OpenClaw gives the agent access to everything. We give it access to exactly what the task needs.
+Note: `.claude/settings.local.json` restricts interactive Claude Code sessions to `Bash(uv run:*)` only. Headless `claude -p` runs use the default permission model — the subprocess isolation (env var stripping, separate process group) is the security boundary for automated tasks.
 
 ## Trust and Verification
 
@@ -141,7 +143,7 @@ Start with low-stakes tasks — content drafts, research summaries, code review 
 ## Repo Structure
 
 ```
-tools/agent_worker.py          # The worker (~100 lines)
+agent_worker.py                # The worker
 .claude/skills/youtube-repurpose/scripts/youtube.py  # YouTube research tool
 CLAUDE.md                      # Agent instructions + skill routing
 .claude/skills/linkedin-post/  # LinkedIn writing skill + references
