@@ -142,7 +142,7 @@ Start with low-stakes tasks — content drafts, research summaries, code review 
 
 ```
 tools/agent_worker.py          # The worker (~100 lines)
-tools/youtube.py               # YouTube transcript tool
+.claude/skills/youtube-repurpose/scripts/youtube.py  # YouTube research tool
 CLAUDE.md                      # Agent instructions + skill routing
 .claude/skills/linkedin-post/  # LinkedIn writing skill + references
 .claude/skills/airtable/       # Airtable CLI skill

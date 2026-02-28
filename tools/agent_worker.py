@@ -30,7 +30,6 @@ from todoist_api_python.api import TodoistAPI
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TASK_TIMEOUT = 300  # 5 minutes per task
 MAX_RETRIES = 3  # give up after this many failures
-ALLOWED_TOOLS = ["Read", "Write", "Glob", "Grep", "Bash(uv run:*)"]
 RETRY_PREFIX = "agent-retry-"  # labels: agent-retry-1, agent-retry-2, etc.
 
 
@@ -92,8 +91,6 @@ def dispatch(title: str, description: str | None, *,
     cmd = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", output_format]
     if verbose:
         cmd.append("--verbose")
-    for tool in ALLOWED_TOOLS:
-        cmd.extend(["--allowedTools", tool])
 
     print("  Dispatching to Claude Code...")
     env = os.environ.copy()
@@ -172,11 +169,6 @@ def dispatch(title: str, description: str | None, *,
         error_parts = [f"Exit code {proc.returncode}"]
         if stderr_text.strip():
             error_parts.append(f"stderr: {stderr_text.strip()[:500]}")
-        if not verbose and not result_text:
-            # In non-verbose mode, stdout might have useful info too
-            stdout_raw = proc.stdout.read() if proc.stdout else ""
-            if stdout_raw.strip():
-                error_parts.append(f"stdout: {stdout_raw.strip()[:500]}")
         if result_text:
             error_parts.append(f"output: {result_text[:500]}")
 
@@ -265,7 +257,7 @@ def main():
     parser.add_argument("--watch", action="store_true", help="Poll continuously")
     parser.add_argument("--interval", type=int, default=30, help="Poll interval in seconds")
     parser.add_argument("--verbose", action="store_true",
-                        help="Stream progress updates to Todoist as the agent works")
+                        help="Stream agent progress to terminal")
     parser.add_argument("--max-retries", type=int, default=MAX_RETRIES,
                         help=f"Give up after N failures (default {MAX_RETRIES})")
     args = parser.parse_args()
@@ -291,7 +283,7 @@ def main():
 
     print(f"Watching project: {args.project} (id: {project_id})")
     if args.verbose:
-        print("Verbose mode: progress updates will be posted to Todoist")
+        print("Verbose mode: streaming agent progress to terminal")
 
     max_retries = args.max_retries
 

@@ -20,7 +20,7 @@ Use the YouTube tool to download the transcript.
 The input can be a video URL or a video ID. Extract the video ID if given a URL (the part after `v=` or after `youtu.be/`).
 
 ```bash
-uv run tools/youtube.py get_transcript VIDEO_ID
+uv run .claude/skills/youtube-repurpose/scripts/youtube.py get_transcript VIDEO_ID
 ```
 
 Save the transcript to `workspace/transcripts/VIDEO_ID.txt`.
